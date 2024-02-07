@@ -1,164 +1,232 @@
-#include <Wire.h>
-#include <SPI.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-#include "Adafruit_VEML7700.h"
+#include <Arduino.h>
+#include <WiFi.h>
+#include <Firebase_ESP_Client.h>
+#include "time.h"
 
+// Sleep time start (10pm)
+#define SLEEP_TIME_START 22 
 
-/*#include <SPI.h>
-#define BME_SCK 18
-#define BME_MISO 19
-#define BME_MOSI 23
-#define BME_CS 5*/
+#define TIME_TO_SLEEP 36000000000 // 1 hour in microseconds
 
-#define SEALEVELPRESSURE_HPA (1013.25)
-Adafruit_VEML7700 veml = Adafruit_VEML7700();
+time_t currentTime;
+// Sleep time end (8am) 
+#define SLEEP_TIME_END 8
 
-Adafruit_BME280 bme; // I2C
-//Adafruit_BME280 bme(BME_CS); // hardware SPI
-//Adafruit_BME280 bme(BME_CS, BME_MOSI, BME_MISO, BME_SCK); // software SPI
+#include "addons/TokenHelper.h"
+//Provide the RTDB payload printing info and other helper functions.
+#include "addons/RTDBHelper.h"
 
-// Variables for the low-pass filter
-float temperatureFiltered = 0.0;
-const float filterCoefficient = 0.2;
+const char* ssid = "UW MPSK";
+const char* password = "5T]6jyRb_Q"; // Replace with your network password
+// #define API_KEY "YourAPIKeyHere" // Replace with your API key
+#define STAGE_INTERVAL 15000 // 12 seconds each stage
+#define MAX_WIFI_RETRIES 5 // Maximum number of WiFi connection retries
 
-Adafruit_SSD1306 display = Adafruit_SSD1306(128, 32, &Wire);
-unsigned long delayTime;
+// // Insert your network credentials
+// #define WIFI_SSID "UW MPSK"
+// #define WIFI_PASSWORD "=#7nD)V&-K"
+
+// Insert Firebase project API Key
+#define API_KEY "AIzaSyAOVJ3bSxV8hqGTJqD4fQ5lnC8MOKLBrQw"
+
+// Insert RTDB URLefine the RTDB URL */
+#define DATABASE_URL "https://lab-gix-default-rtdb.firebaseio.com/" 
+
+int uploadInterval = 10000; // 1 seconds each upload
+
+//Define Firebase Data object
+FirebaseData fbdo;
+
+FirebaseAuth auth;
+FirebaseConfig config;
+
+unsigned long sendDataPrevMillis = 0;
+int count = 0;
+bool signupOK = false;
+
+// HC-SR04 Pins
+const int trigPin = D1;
+const int echoPin = D0;
+
+// Define sound speed in cm/usec
+const float soundSpeed = 0.034;
+
+// Function prototypes
+float measureDistance();
+void connectToWiFi();
+void initFirebase();
+void sendDataToFirebase(float distance);
 
 void setup() {
-  Serial.begin(9600);
-  pinMode(6, OUTPUT);
-
-
-    while (!Serial) { delay(10); }
-
-  if (!veml.begin()) {
-    Serial.println("Sensor not found");
-    while (1);
-  }
-  Serial.println("Sensor found");
-
-  // == OPTIONAL =====
-  // Can set non-default gain and integration time to
-  // adjust for different lighting conditions.
-  // =================
-  // veml.setGain(VEML7700_GAIN_1_8);
-  // veml.setIntegrationTime(VEML7700_IT_100MS);
-
-  // Serial.print(F("Gain: "));
-  switch (veml.getGain()) {
-    case VEML7700_GAIN_1: Serial.println("1"); break;
-    case VEML7700_GAIN_2: Serial.println("2"); break;
-    case VEML7700_GAIN_1_4: Serial.println("1/4"); break;
-    case VEML7700_GAIN_1_8: Serial.println("1/8"); break;
-  }
-
-  // Serial.print(F("Integration Time (ms): "));
-  switch (veml.getIntegrationTime()) {
-    case VEML7700_IT_25MS: Serial.println("25"); break;
-    case VEML7700_IT_50MS: Serial.println("50"); break;
-    case VEML7700_IT_100MS: Serial.println("100"); break;
-    case VEML7700_IT_200MS: Serial.println("200"); break;
-    case VEML7700_IT_400MS: Serial.println("400"); break;
-    case VEML7700_IT_800MS: Serial.println("800"); break;
-  }
-
-  veml.setLowThreshold(10000);
-  veml.setHighThreshold(20000);
-  veml.interruptEnable(true);
-   
-  // by default, we'll generate the high voltage from the 3.3v line internally! (neat!)
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C (for the 128x64)
-   // init done
-  display.display();
+  // put your setup code here, to run once:
+  Serial.begin(115200);
   delay(100);
-  display.clearDisplay();
-  display.display();
-  display.setTextSize(1.2);
-  display.setTextColor(WHITE);
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // First, we let the device run for 12 seconds without doing anything
+  // Serial.println("Running for 12 seconds without doing anything...");
+  // // delay(STAGE_INTERVAL); // 12 seconds (in milliseconds)
+  // unsigned long startTime = millis();
+  // while (millis() - startTime < STAGE_INTERVAL)
+  // {
+  //   delay(100); // Delay between measurements
+  // }
+
+  // Second, we start with the ultrasonic sensor only
+  // Serial.println("Measuring distance for 12 seconds...");
+  // // startTime = millis();
+  // while (millis() - startTime < STAGE_INTERVAL)
+  // {
+  //   float currentDistance = measureDistance();
+  //   if (currentDistance < 50) {
+  //     Serial.println("Trigger");
+  //     connectToWiFi();
+  //     initFirebase();
+  //     sendDataToFirebase(currentDistance);
+  //   }
+  //   delay(100); // Delay between measurements
+  // }
+
+  // Now, turn on WiFi and keep measuring
+  // Serial.println("Turning on WiFi and measuring for 12 seconds...");
+  // connectToWiFi();
+  // startTime = millis();
+  // while (millis() - startTime < STAGE_INTERVAL)
+  // {
+  //   measureDistance();
+  //   delay(100); // Delay between measurements
+  // }
+
+  // Now, turn on Firebase and send data every 1 second with distance measurements
+  // Serial.println("Turning on Firebase and sending data every 10 second...");
+  // connectToWiFi();
+  // initFirebase();
+  // unsigned long startTime = startTime = millis();
+  // while (millis() - startTime < STAGE_INTERVAL)
+  // {
+  //   float currentDistance = measureDistance();
+  //   sendDataToFirebase(currentDistance);
+  //   delay(100); // Delay between measurements
+  // }
+
+  // // Go to deep sleep for 12 seconds
+  // Serial.println("Going to deep sleep for 12 seconds...");
+  // WiFi.disconnect();
+  // esp_sleep_enable_timer_wakeup(STAGE_INTERVAL * 1000); // in microseconds
+  // uint64_t sleep_time_us = TIME_TO_SLEEP;
+  esp_sleep_enable_timer_wakeup(16ULL * 60 * 60 * 1000000);
+  // esp_deep_sleep_start();
+}
+
+void getLocalTime() {
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    Serial.println("Failed to obtain time");
+    return;
+  }
+  time_t currentTime = mktime(&timeinfo);
+}
+
+void loop(){
+
+  getLocalTime(); // Get current time
   
-  bool status;
-  // default settings
-  // (you can also pass in a Wire library object like &Wire2)
-  status = bme.begin(0x76);  
-  if (!status) {
-    Serial.println("Could not find a valid BME280 sensor, check wiring!");
-    while (1);
+  if(currentTime >= SLEEP_TIME_START || currentTime <= SLEEP_TIME_END) {
+    esp_deep_sleep_start(); 
   }
 
-  delayTime = 1000;
+  float distance = measureDistance();
 
-  Serial.println();
+  if(distance < 50) {
+    connectToWiFi();
+    initFirebase(); 
+    sendDataToFirebase(distance);
+  }
+
+  delay(100);
 }
 
 
-void loop() { 
+
+float measureDistance()
+{
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH);
+  float distance = duration * soundSpeed / 2;
+
+  Serial.print("Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+  return distance;
+}
+
+void connectToWiFi()
+{
+  // Print the device's MAC address.
+  Serial.println(WiFi.macAddress());
+  WiFi.begin(ssid, password);
+  Serial.println("Connecting to WiFi");
+  int wifiCnt = 0;
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+    wifiCnt++;
+    if (wifiCnt > MAX_WIFI_RETRIES){
+      Serial.println("WiFi connection failed");
+      ESP.restart();
+    }
+  }
+  Serial.println("Connected to WiFi");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void initFirebase()
+{
+  /* Assign the api key (required) */
+  config.api_key = API_KEY;
+
+  /* Assign the RTDB URL (required) */
+  config.database_url = DATABASE_URL;
+
+  /* Sign up */
+  if (Firebase.signUp(&config, &auth, "", "")){
+    Serial.println("ok");
+    signupOK = true;
+  }
+  else{
+    Serial.printf("%s\n", config.signer.signupError.message.c_str());
+  }
+
+  /* Assign the callback function for the long running token generation task */
+  config.token_status_callback = tokenStatusCallback; //see addons/TokenHelper.h
   
-  display.setCursor(0,0);
-  display.clearDisplay();
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectNetwork(true);
+}
 
-  // Serial.print("raw ALS: "); Serial.println(veml.readALS());
-  // Serial.print("raw white: "); Serial.println(veml.readWhite());
-  // Serial.print("lux: "); Serial.println(veml.readLux());
-
-  uint16_t irq = veml.interruptStatus();
-  if (irq & VEML7700_INTERRUPT_LOW) {
-    Serial.println("** Low threshold");
+void sendDataToFirebase(float distance){
+    if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > uploadInterval || sendDataPrevMillis == 0)){
+    sendDataPrevMillis = millis();
+    // Write an Float number on the database path test/float
+    if (Firebase.RTDB.pushFloat(&fbdo, "test/distance", distance)){
+      Serial.println("PASSED");
+      Serial.print("PATH: ");
+      Serial.println(fbdo.dataPath());
+      Serial.print("TYPE: " );
+      Serial.println(fbdo.dataType());
+    } else {
+      Serial.println("FAILED");
+      Serial.print("REASON: ");
+      Serial.println(fbdo.errorReason());
+    }
+    count++;
   }
-  if (irq & VEML7700_INTERRUPT_HIGH) {
-    Serial.println("** High threshold");
-
-  }
-  
-  //  // Read the raw temperature from the sensor
-  // float temperatureRaw = bme.readTemperature();
-
-  // // Apply the low-pass filter
-  // temperatureFiltered = (filterCoefficient * temperatureRaw) + ((1 - filterCoefficient) * temperatureFiltered);
-
-  // Print the filtered temperature to the Serial output
-  // Serial.print("Filtered Temperature = ");
-  // Serial.println(temperatureFiltered);
-
-  // Serial.print("Temperature = "); Serial.print(bme.readTemperature()); Serial.println(" *C");
-  display.print("Temperature: "); display.print(bme.readTemperature()); display.println(" *C");
-
-  // Serial.print("Pressure = "); Serial.print(bme.readPressure() / 100.0F); Serial.println(" hPa");
-  display.print("Pressure: "); display.print(bme.readPressure() / 100.0F); display.println(" hPa");
-
-  // Serial.print("Humidity = "); Serial.print(bme.readHumidity()); Serial.println(" %");
-  display.print("Humidity: "); display.print(bme.readHumidity()); display.println(" %");
-
-  // Serial.print("lux = "); Serial.print(veml.readLux());
-  //  Serial.println(" lx");
-  display.print("Lux: "); display.print(veml.readLux()); display.println(" lx");
-
-  // Serial.print("T:");
-  // Serial.println(bme.readTemperature());
-
-    // Read the raw lux value from the VEML7700
-  float vemlLux = veml.readLux();
-
-  // Apply the offset
-  float correctedLux = vemlLux - 0.92;
-
-  // Print the corrected lux value to the Serial output
-  Serial.print("Corrected Lux = ");
-  Serial.println(correctedLux);
-
-
-  if (veml.readLux() < 50) {
-  //     digitalWrite(2, HIGH);
-  //   // Add code here to send A2Voltage using your preferred communication method (e.g., Serial.write())
-  // Serial.print("lux low ");
-  digitalWrite(6, HIGH);   
-  delay(1000); 
-  digitalWrite(6, LOW);              
-  }
-
-  Serial.println();
-  display.display();
-  delay(1000);
 }
